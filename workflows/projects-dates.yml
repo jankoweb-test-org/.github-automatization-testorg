@@ -1,0 +1,30 @@
+name: Organization Project Auto-Date
+on:
+  project_v2_item:
+    types: [created, edited, reordered]
+
+jobs:
+  update-dates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Fields
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          # --- ZDE SI ZMĚŇ NÁZVY SVÝCH SLOUPCŮ ---
+          FIELD_CREATED: "Added"
+          FIELD_UPDATED: "Edited"
+          # --------------------------------------
+          PROJECT_ID: ${{ github.event.project_v2_item.project_node_id }}
+          ITEM_ID: ${{ github.event.project_v2_item.node_id }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          # Formát pro typ pole 'Date' je RRRR-MM-DD
+          NOW=$(date -u +"%Y-%m-%d")
+
+          # 1. Vždy aktualizujeme pole pro poslední změnu
+          gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_UPDATED" --date "$NOW"
+
+          # 2. Pokud byla položka právě vytvořena v projektu, nastavíme i datum vytvoření
+          if [ "$EVENT_ACTION" = "created" ]; then
+            gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_CREATED" --date "$NOW"
+          fi
