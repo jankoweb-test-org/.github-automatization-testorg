@@ -23,13 +23,98 @@ jobs:
           fi
           echo "Owner type: $OWNER_TYPE"
 
+          fetch_project_numbers() {
+            local cursor=""
+            local has_next="true"
+            local end_cursor=""
+            local response=""
+            local numbers=""
+            local result=""
+
+            while [ "$has_next" = "true" ]; do
+              if [ "$OWNER_TYPE" = "org" ]; then
+                if [ -z "$cursor" ]; then
+                  response=$(gh api graphql -f query='query($owner: String!) { organization(login: $owner) { projectsV2(first: 100) { nodes { number } pageInfo { hasNextPage endCursor } } } }' -f owner="$OWNER")
+                else
+                  response=$(gh api graphql -f query='query($owner: String!, $cursor: String!) { organization(login: $owner) { projectsV2(first: 100, after: $cursor) { nodes { number } pageInfo { hasNextPage endCursor } } } }' -f owner="$OWNER" -f cursor="$cursor")
+                fi
+                numbers=$(echo "$response" | jq -r '.data.organization.projectsV2.nodes[].number')
+                has_next=$(echo "$response" | jq -r '.data.organization.projectsV2.pageInfo.hasNextPage')
+                end_cursor=$(echo "$response" | jq -r '.data.organization.projectsV2.pageInfo.endCursor // empty')
+              else
+                if [ -z "$cursor" ]; then
+                  response=$(gh api graphql -f query='query($owner: String!) { user(login: $owner) { projectsV2(first: 100) { nodes { number } pageInfo { hasNextPage endCursor } } } }' -f owner="$OWNER")
+                else
+                  response=$(gh api graphql -f query='query($owner: String!, $cursor: String!) { user(login: $owner) { projectsV2(first: 100, after: $cursor) { nodes { number } pageInfo { hasNextPage endCursor } } } }' -f owner="$OWNER" -f cursor="$cursor")
+                fi
+                numbers=$(echo "$response" | jq -r '.data.user.projectsV2.nodes[].number')
+                has_next=$(echo "$response" | jq -r '.data.user.projectsV2.pageInfo.hasNextPage')
+                end_cursor=$(echo "$response" | jq -r '.data.user.projectsV2.pageInfo.endCursor // empty')
+              fi
+
+              if [ -n "$numbers" ]; then
+                if [ -z "$result" ]; then
+                  result="$numbers"
+                else
+                  result="$result"$'\n'"$numbers"
+                fi
+              fi
+
+              cursor="$end_cursor"
+              [ -z "$cursor" ] && has_next="false"
+            done
+
+            echo "$result"
+          }
+
+          fetch_project_items() {
+            local project_number="$1"
+            local cursor=""
+            local has_next="true"
+            local end_cursor=""
+            local response=""
+            local page_items=""
+            local result=""
+
+            while [ "$has_next" = "true" ]; do
+              if [ "$OWNER_TYPE" = "org" ]; then
+                if [ -z "$cursor" ]; then
+                  response=$(gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } pageInfo { hasNextPage endCursor } } } } }' -F number="$project_number" -f owner="$OWNER")
+                else
+                  response=$(gh api graphql -f query='query($owner: String!, $number: Int!, $cursor: String!) { organization(login: $owner) { projectV2(number: $number) { items(first: 100, after: $cursor) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } pageInfo { hasNextPage endCursor } } } } }' -F number="$project_number" -f owner="$OWNER" -f cursor="$cursor")
+                fi
+                page_items=$(echo "$response" | jq -c '.data.organization.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+                has_next=$(echo "$response" | jq -r '.data.organization.projectV2.items.pageInfo.hasNextPage')
+                end_cursor=$(echo "$response" | jq -r '.data.organization.projectV2.items.pageInfo.endCursor // empty')
+              else
+                if [ -z "$cursor" ]; then
+                  response=$(gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } pageInfo { hasNextPage endCursor } } } } }' -F number="$project_number" -f owner="$OWNER")
+                else
+                  response=$(gh api graphql -f query='query($owner: String!, $number: Int!, $cursor: String!) { user(login: $owner) { projectV2(number: $number) { items(first: 100, after: $cursor) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } pageInfo { hasNextPage endCursor } } } } }' -F number="$project_number" -f owner="$OWNER" -f cursor="$cursor")
+                fi
+                page_items=$(echo "$response" | jq -c '.data.user.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+                has_next=$(echo "$response" | jq -r '.data.user.projectV2.items.pageInfo.hasNextPage')
+                end_cursor=$(echo "$response" | jq -r '.data.user.projectV2.items.pageInfo.endCursor // empty')
+              fi
+
+              if [ -n "$page_items" ]; then
+                if [ -z "$result" ]; then
+                  result="$page_items"
+                else
+                  result="$result"$'\n'"$page_items"
+                fi
+              fi
+
+              cursor="$end_cursor"
+              [ -z "$cursor" ] && has_next="false"
+            done
+
+            echo "$result"
+          }
+
           # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
           # Používá GraphQL kvůli kompatibilitě napříč verzemi gh
-          if [ "$OWNER_TYPE" = "org" ]; then
-            PROJECT_LIST=$(gh api graphql -f query='query($owner: String!) { organization(login: $owner) { projectsV2(first: 100) { nodes { number } } } }' -f owner="$OWNER" --jq '.data.organization.projectsV2.nodes[].number')
-          else
-            PROJECT_LIST=$(gh api graphql -f query='query($owner: String!) { user(login: $owner) { projectsV2(first: 100) { nodes { number } } } }' -f owner="$OWNER" --jq '.data.user.projectsV2.nodes[].number')
-          fi
+          PROJECT_LIST=$(fetch_project_numbers)
 
           if [ -z "$PROJECT_LIST" ]; then
             echo "Nebyly nalezeny žádné projekty."
@@ -72,11 +157,7 @@ jobs:
             FIELD_EDITED_ID=$(ensure_field "edited")
 
             # 2. Načtení položek projektu
-            if [ "$OWNER_TYPE" = "org" ]; then
-              items=$(gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.organization.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
-            else
-              items=$(gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.user.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
-            fi
+            items=$(fetch_project_items "$PROJ_NR")
 
             # 3. Iterace přes položky a aktualizace dat
             echo "$items" | jq -c '.' | while read item; do
