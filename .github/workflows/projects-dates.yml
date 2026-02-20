@@ -1,27 +1,79 @@
-name: Organization Project Auto-Date
+name: Global Organization Sync (Full Auto)
 on:
-  projects_v2_item:
-    types: [created, edited, reordered]
+  schedule:
+    - cron: '0 * * * *' # Každou hodinu
+  workflow_dispatch:      # Pro ruční spuštění
 
 jobs:
-  update-dates:
+  sync-all:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Fields
+      - name: Sync All Organization Projects
         env:
           GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }}
-          FIELD_CREATED: "added"
-          FIELD_UPDATED: "edited"
-          PROJECT_ID: ${{ github.event.project_v2_item.project_node_id }}
-          ITEM_ID: ${{ github.event.project_v2_item.node_id }}
-          EVENT_ACTION: ${{ github.event.action }}
+          OWNER: "jankoweb-test-org" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
         run: |
-          NOW=$(date -u +"%Y-%m-%d")
+          echo "Hledám všechny projekty pro $OWNER..."
 
-          # 1. Always update the field tracking the last edit
-          gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_UPDATED" --date "$NOW"
+          # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
+          # Načte čísla (number) všech projektů v organizaci
+          PROJECT_LIST=$(gh project list --owner "$OWNER" --format json --limit 100 -q '.[].number')
 
-          # 2. If the item was just created in the project, also set the created date
-          if [ "$EVENT_ACTION" = "created" ]; then
-            gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_CREATED" --date "$NOW"
+          if [ -z "$PROJECT_LIST" ]; then
+            echo "Nebyly nalezeny žádné projekty."
+            exit 0
           fi
+
+          for PROJ_NR in $PROJECT_LIST; do
+            echo "=========================================="
+            echo "PROJEKT Č. $PROJ_NR"
+            
+            # Načtení dat o projektu (ID a existující pole)
+            PROJ_DATA=$(gh project view $PROJ_NR --owner "$OWNER" --format json)
+            PROJ_ID=$(echo $PROJ_DATA | jq -r '.id')
+            PROJ_TITLE=$(echo $PROJ_DATA | jq -r '.title')
+            echo "Název: $PROJ_TITLE (ID: $PROJ_ID)"
+
+            # Funkce pro zajištění existence pole (pokud neexistuje, vytvoří ho)
+            ensure_field() {
+              local field_name=$1
+              local field_id=$(echo $PROJ_DATA | jq -r ".fields[] | select(.name==\"$field_name\") | .id")
+              
+              if [ "$field_id" == "null" ] || [ -z "$field_id" ]; then
+                echo "  -> Vytvářím pole '$field_name'..."
+                field_id=$(gh api graphql -f query='
+                  mutation($proj: ID!, $name: String!) {
+                    createProjectV2Field(input: {projectId: $proj, name: $name, dataType: DATE}) {
+                      projectV2Field { ... on ProjectV2Field { id } }
+                    }
+                  }' -f proj="$PROJ_ID" -f name="$field_name" --jq '.data.createProjectV2Field.projectV2Field.id')
+              fi
+              echo "$field_id"
+            }
+
+            FIELD_ADDED_ID=$(ensure_field "added")
+            FIELD_EDITED_ID=$(ensure_field "edited")
+
+            # 2. Načtení položek projektu
+            items=$(gh project item-list $PROJ_NR --owner "$OWNER" --format json -q '.items[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+
+            # 3. Iterace přes položky a aktualizace dat
+            echo "$items" | jq -c '.' | while read item; do
+              ITEM_ID=$(echo $item | jq -r '.id')
+              
+              RAW_CREATED=$(echo $item | jq -r '.created // empty')
+              RAW_UPDATED=$(echo $item | jq -r '.updated // empty')
+              
+              [ ! -z "$RAW_CREATED" ] && DATE_CREATED=${RAW_CREATED:0:10}
+              [ ! -z "$RAW_UPDATED" ] && DATE_UPDATED=${RAW_UPDATED:0:10}
+
+              # Zápis dat (pokud jsou k dispozici)
+              if [ ! -z "$DATE_CREATED" ]; then
+                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field "added" --date "$DATE_CREATED" > /dev/null
+              fi
+              if [ ! -z "$DATE_UPDATED" ]; then
+                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field "edited" --date "$DATE_UPDATED" > /dev/null
+              fi
+            done
+            echo "Projekt $PROJ_NR hotov."
+          done
