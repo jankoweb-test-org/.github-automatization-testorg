@@ -1,4 +1,4 @@
-name: Global Organization Sync (Full Auto)
+name: Projects dates update (cron)
 on:
   schedule:
     - cron: '0 * * * *' # Každou hodinu
