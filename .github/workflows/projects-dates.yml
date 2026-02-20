@@ -15,7 +15,7 @@ jobs:
         run: |
           echo "Hledám všechny projekty pro $OWNER..."
 
-          # Detect owner type (org or user) because gh may require it
+          # Detect owner type (org or user)
           if gh api "orgs/$OWNER" >/dev/null 2>&1; then
             OWNER_TYPE=org
           else
@@ -24,8 +24,12 @@ jobs:
           echo "Owner type: $OWNER_TYPE"
 
           # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
-          # Načte čísla (number) všech projektů v organizaci
-          PROJECT_LIST=$(gh project list --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json --limit 100 -q '.[].number')
+          # Používá GraphQL kvůli kompatibilitě napříč verzemi gh
+          if [ "$OWNER_TYPE" = "org" ]; then
+            PROJECT_LIST=$(gh api graphql -f query='query($owner: String!) { organization(login: $owner) { projectsV2(first: 100) { nodes { number } } } }' -f owner="$OWNER" --jq '.data.organization.projectsV2.nodes[].number')
+          else
+            PROJECT_LIST=$(gh api graphql -f query='query($owner: String!) { user(login: $owner) { projectsV2(first: 100) { nodes { number } } } }' -f owner="$OWNER" --jq '.data.user.projectsV2.nodes[].number')
+          fi
 
           if [ -z "$PROJECT_LIST" ]; then
             echo "Nebyly nalezeny žádné projekty."
@@ -37,15 +41,20 @@ jobs:
             echo "PROJEKT Č. $PROJ_NR"
             
             # Načtení dat o projektu (ID a existující pole)
-            PROJ_DATA=$(gh project view $PROJ_NR --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json)
-            PROJ_ID=$(echo $PROJ_DATA | jq -r '.id')
-            PROJ_TITLE=$(echo $PROJ_DATA | jq -r '.title')
+            if [ "$OWNER_TYPE" = "org" ]; then
+              PROJ_DATA=$(gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.organization.projectV2')
+            else
+              PROJ_DATA=$(gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.user.projectV2')
+            fi
+
+            PROJ_ID=$(echo "$PROJ_DATA" | jq -r '.id')
+            PROJ_TITLE=$(echo "$PROJ_DATA" | jq -r '.title')
             echo "Název: $PROJ_TITLE (ID: $PROJ_ID)"
 
             # Funkce pro zajištění existence pole (pokud neexistuje, vytvoří ho)
             ensure_field() {
               local field_name=$1
-              local field_id=$(echo $PROJ_DATA | jq -r ".fields[] | select(.name==\"$field_name\") | .id")
+              local field_id=$(echo "$PROJ_DATA" | jq -r ".fields.nodes[]? | select(.name==\"$field_name\") | .id")
               
               if [ "$field_id" == "null" ] || [ -z "$field_id" ]; then
                 echo "  -> Vytvářím pole '$field_name'..."
@@ -63,7 +72,11 @@ jobs:
             FIELD_EDITED_ID=$(ensure_field "edited")
 
             # 2. Načtení položek projektu
-            items=$(gh project item-list $PROJ_NR --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json -q '.items[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+            if [ "$OWNER_TYPE" = "org" ]; then
+              items=$(gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.organization.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+            else
+              items=$(gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { items(first: 100) { nodes { id content { ... on DraftIssue { createdAt updatedAt } ... on Issue { createdAt updatedAt } ... on PullRequest { createdAt updatedAt } } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.user.projectV2.items.nodes[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+            fi
 
             # 3. Iterace přes položky a aktualizace dat
             echo "$items" | jq -c '.' | while read item; do
