@@ -12,6 +12,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }}
           OWNER: "jankoweb-test-org" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
+          FIELD_CREATED: "added"   # Název vašeho sloupce v projektu
+          FIELD_UPDATED: "edited"  # Název vašeho sloupce v projektu
         run: |
           echo "Hledám všechny projekty pro $OWNER..."
 
@@ -112,6 +114,16 @@ jobs:
             echo "$result"
           }
 
+          fetch_project_data() {
+            local project_number="$1"
+
+            if [ "$OWNER_TYPE" = "org" ]; then
+              gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$project_number" -f owner="$OWNER" --jq '.data.organization.projectV2'
+            else
+              gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$project_number" -f owner="$OWNER" --jq '.data.user.projectV2'
+            fi
+          }
+
           # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
           # Používá GraphQL kvůli kompatibilitě napříč verzemi gh
           PROJECT_LIST=$(fetch_project_numbers)
@@ -126,11 +138,7 @@ jobs:
             echo "PROJEKT Č. $PROJ_NR"
             
             # Načtení dat o projektu (ID a existující pole)
-            if [ "$OWNER_TYPE" = "org" ]; then
-              PROJ_DATA=$(gh api graphql -f query='query($owner: String!, $number: Int!) { organization(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.organization.projectV2')
-            else
-              PROJ_DATA=$(gh api graphql -f query='query($owner: String!, $number: Int!) { user(login: $owner) { projectV2(number: $number) { id title fields(first: 100) { nodes { ... on ProjectV2Field { id name dataType } } } } } }' -F number="$PROJ_NR" -f owner="$OWNER" --jq '.data.user.projectV2')
-            fi
+            PROJ_DATA=$(fetch_project_data "$PROJ_NR")
 
             PROJ_ID=$(echo "$PROJ_DATA" | jq -r '.id')
             PROJ_TITLE=$(echo "$PROJ_DATA" | jq -r '.title')
@@ -139,42 +147,48 @@ jobs:
             # Funkce pro zajištění existence pole (pokud neexistuje, vytvoří ho)
             ensure_field() {
               local field_name=$1
-              local field_id=$(echo "$PROJ_DATA" | jq -r ".fields.nodes[]? | select(.name==\"$field_name\") | .id")
+              local field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .id' | head -n1)
               
               if [ "$field_id" == "null" ] || [ -z "$field_id" ]; then
                 echo "  -> Vytvářím pole '$field_name'..."
-                field_id=$(gh api graphql -f query='
+                gh api graphql -f query='
                   mutation($proj: ID!, $name: String!) {
                     createProjectV2Field(input: {projectId: $proj, name: $name, dataType: DATE}) {
                       projectV2Field { ... on ProjectV2Field { id } }
                     }
-                  }' -f proj="$PROJ_ID" -f name="$field_name" --jq '.data.createProjectV2Field.projectV2Field.id')
+                  }' -f proj="$PROJ_ID" -f name="$field_name" >/dev/null 2>&1 || true
+
+                PROJ_DATA=$(fetch_project_data "$PROJ_NR")
+                field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .id' | head -n1)
               fi
+
               echo "$field_id"
             }
 
-            FIELD_ADDED_ID=$(ensure_field "added")
-            FIELD_EDITED_ID=$(ensure_field "edited")
+            FIELD_CREATED_ID=$(ensure_field "$FIELD_CREATED")
+            FIELD_UPDATED_ID=$(ensure_field "$FIELD_UPDATED")
 
             # 2. Načtení položek projektu
             items=$(fetch_project_items "$PROJ_NR")
 
             # 3. Iterace přes položky a aktualizace dat
             echo "$items" | jq -c '.' | while read item; do
-              ITEM_ID=$(echo $item | jq -r '.id')
+              ITEM_ID=$(echo "$item" | jq -r '.id')
               
-              RAW_CREATED=$(echo $item | jq -r '.created // empty')
-              RAW_UPDATED=$(echo $item | jq -r '.updated // empty')
+              RAW_CREATED=$(echo "$item" | jq -r '.created // empty')
+              RAW_UPDATED=$(echo "$item" | jq -r '.updated // empty')
+              DATE_CREATED=""
+              DATE_UPDATED=""
               
               [ ! -z "$RAW_CREATED" ] && DATE_CREATED=${RAW_CREATED:0:10}
               [ ! -z "$RAW_UPDATED" ] && DATE_UPDATED=${RAW_UPDATED:0:10}
 
               # Zápis dat (pokud jsou k dispozici)
-              if [ ! -z "$DATE_CREATED" ]; then
-                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field "added" --date "$DATE_CREATED" > /dev/null
+              if [ ! -z "$DATE_CREATED" ] && [ ! -z "$FIELD_CREATED_ID" ] && [ "$FIELD_CREATED_ID" != "null" ]; then
+                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field-id "$FIELD_CREATED_ID" --date "$DATE_CREATED" > /dev/null
               fi
-              if [ ! -z "$DATE_UPDATED" ]; then
-                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field "edited" --date "$DATE_UPDATED" > /dev/null
+              if [ ! -z "$DATE_UPDATED" ] && [ ! -z "$FIELD_UPDATED_ID" ] && [ "$FIELD_UPDATED_ID" != "null" ]; then
+                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field-id "$FIELD_UPDATED_ID" --date "$DATE_UPDATED" > /dev/null
               fi
             done
             echo "Projekt $PROJ_NR hotov."
