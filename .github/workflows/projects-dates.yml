@@ -1,7 +1,7 @@
 name: Organization Project Auto-Date
 on:
   project_v2_item:
-    types: [created, edited, reordered]
+    types: [created, edited]
 
 jobs:
   update-dates:
@@ -10,17 +10,18 @@ jobs:
       - name: Update Fields
         env:
           GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }}
-          FIELD_CREATED: "added"   # Název vašeho sloupce v projektu
-          FIELD_UPDATED: "edited"  # Název vašeho sloupce v projektu
+          FIELD_CREATED: "added"
+          FIELD_UPDATED: "edited"
           PROJECT_ID: ${{ github.event.project_v2_item.project_node_id }}
           ITEM_ID: ${{ github.event.project_v2_item.node_id }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
           NOW=$(date -u +"%Y-%m-%d")
 
-          # 1. Vždy aktualizuj 'edited'
-          gh project item-edit --id "$ITEM_ID" --field "$FIELD_UPDATED" --date "$NOW"
+          # 1. Always update the field tracking the last edit
+          gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_UPDATED" --date "$NOW"
 
-          # 2. Pokud je to nová položka, nastav 'added'
-          if [ "${{ github.event.action }}" = "created" ]; then
-            gh project item-edit --id "$ITEM_ID" --field "$FIELD_CREATED" --date "$NOW"
+          # 2. If the item was just created in the project, also set the created date
+          if [ "$EVENT_ACTION" = "created" ]; then
+            gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_CREATED" --date "$NOW"
           fi
