@@ -1,7 +1,7 @@
 name: Organization Project Auto-Date
 on:
-  project_v2_item:
-    types: [created, edited]
+  projects_v2_item:
+    types: [created, edited, reordered]
 
 jobs:
   update-dates:
