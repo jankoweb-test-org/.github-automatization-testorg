@@ -25,6 +25,12 @@ jobs:
           fi
           echo "Owner type: $OWNER_TYPE"
 
+          if [ "$OWNER_TYPE" = "org" ] && ! gh api "orgs/$OWNER" >/dev/null 2>&1; then
+            echo "Token nemá přístup k organizaci '$OWNER'."
+            echo "Pro org projekty je potřeba minimálně scope: read:org"
+            exit 1
+          fi
+
           fetch_project_numbers() {
             local cursor=""
             local has_next="true"
@@ -124,6 +130,28 @@ jobs:
             fi
           }
 
+          set_item_date() {
+            local project_id="$1"
+            local item_id="$2"
+            local field_id="$3"
+            local date_value="$4"
+
+            gh api graphql -f query='
+              mutation($project: ID!, $item: ID!, $field: ID!, $date: Date!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: $project
+                    itemId: $item
+                    fieldId: $field
+                    value: { date: $date }
+                  }
+                ) {
+                  projectV2Item { id }
+                }
+              }
+            ' -f project="$project_id" -f item="$item_id" -f field="$field_id" -f date="$date_value" >/dev/null
+          }
+
           # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
           # Používá GraphQL kvůli kompatibilitě napříč verzemi gh
           PROJECT_LIST=$(fetch_project_numbers)
@@ -147,7 +175,7 @@ jobs:
             # Funkce pro zajištění existence pole (pokud neexistuje, vytvoří ho)
             ensure_field() {
               local field_name=$1
-              local field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .id' | head -n1)
+              local field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | type) == "string" and ((.name | ascii_downcase) == ($name | ascii_downcase))) | .id' | head -n1)
               
               if [ "$field_id" == "null" ] || [ -z "$field_id" ]; then
                 echo "  -> Vytvářím pole '$field_name'..."
@@ -159,7 +187,7 @@ jobs:
                   }' -f proj="$PROJ_ID" -f name="$field_name" >/dev/null 2>&1 || true
 
                 PROJ_DATA=$(fetch_project_data "$PROJ_NR")
-                field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | ascii_downcase) == ($name | ascii_downcase)) | .id' | head -n1)
+                field_id=$(echo "$PROJ_DATA" | jq -r --arg name "$field_name" '.fields.nodes[]? | select((.name | type) == "string" and ((.name | ascii_downcase) == ($name | ascii_downcase))) | .id' | head -n1)
               fi
 
               echo "$field_id"
@@ -185,10 +213,10 @@ jobs:
 
               # Zápis dat (pokud jsou k dispozici)
               if [ ! -z "$DATE_CREATED" ] && [ ! -z "$FIELD_CREATED_ID" ] && [ "$FIELD_CREATED_ID" != "null" ]; then
-                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field-id "$FIELD_CREATED_ID" --date "$DATE_CREATED" > /dev/null
+                set_item_date "$PROJ_ID" "$ITEM_ID" "$FIELD_CREATED_ID" "$DATE_CREATED"
               fi
               if [ ! -z "$DATE_UPDATED" ] && [ ! -z "$FIELD_UPDATED_ID" ] && [ "$FIELD_UPDATED_ID" != "null" ]; then
-                gh project item-edit --id "$ITEM_ID" --project-id "$PROJ_ID" --field-id "$FIELD_UPDATED_ID" --date "$DATE_UPDATED" > /dev/null
+                set_item_date "$PROJ_ID" "$ITEM_ID" "$FIELD_UPDATED_ID" "$DATE_UPDATED"
               fi
             done
             echo "Projekt $PROJ_NR hotov."
