@@ -1,3 +1,6 @@
+# Variables marked as ***VARIABLE*** will be loaded into tables and will be editable
+# Example: ***PROJECT***, ***BRANCH***, etc.
+
 name: Organization Project Auto-Date
 on:
   project_v2_item:
@@ -9,22 +12,20 @@ jobs:
     steps:
       - name: Update Fields
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-          # --- ZDE SI ZMĚŇ NÁZVY SVÝCH SLOUPCŮ ---
-          FIELD_CREATED: "Added"
-          FIELD_UPDATED: "Edited"
-          # --------------------------------------
+          GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }}
+          FIELD_CREATED: "added"
+          FIELD_UPDATED: "edited"
           PROJECT_ID: ${{ github.event.project_v2_item.project_node_id }}
           ITEM_ID: ${{ github.event.project_v2_item.node_id }}
           EVENT_ACTION: ${{ github.event.action }}
         run: |
-          # Formát pro typ pole 'Date' je RRRR-MM-DD
+          # Date fields use YYYY-MM-DD format (UTC)
           NOW=$(date -u +"%Y-%m-%d")
 
-          # 1. Vždy aktualizujeme pole pro poslední změnu
+          # 1. Always update the field tracking the last edit
           gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_UPDATED" --date "$NOW"
 
-          # 2. Pokud byla položka právě vytvořena v projektu, nastavíme i datum vytvoření
+          # 2. If the item was just created in the project, also set the created date
           if [ "$EVENT_ACTION" = "created" ]; then
             gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" --field "$FIELD_CREATED" --date "$NOW"
           fi
