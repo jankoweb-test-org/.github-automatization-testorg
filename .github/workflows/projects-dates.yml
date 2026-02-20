@@ -15,9 +15,17 @@ jobs:
         run: |
           echo "Hledám všechny projekty pro $OWNER..."
 
+          # Detect owner type (org or user) because gh may require it
+          if gh api "orgs/$OWNER" >/dev/null 2>&1; then
+            OWNER_TYPE=org
+          else
+            OWNER_TYPE=user
+          fi
+          echo "Owner type: $OWNER_TYPE"
+
           # 1. Získání seznamu všech ID projektů (V2) pro daného vlastníka
           # Načte čísla (number) všech projektů v organizaci
-          PROJECT_LIST=$(gh project list --owner "$OWNER" --format json --limit 100 -q '.[].number')
+          PROJECT_LIST=$(gh project list --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json --limit 100 -q '.[].number')
 
           if [ -z "$PROJECT_LIST" ]; then
             echo "Nebyly nalezeny žádné projekty."
@@ -29,7 +37,7 @@ jobs:
             echo "PROJEKT Č. $PROJ_NR"
             
             # Načtení dat o projektu (ID a existující pole)
-            PROJ_DATA=$(gh project view $PROJ_NR --owner "$OWNER" --format json)
+            PROJ_DATA=$(gh project view $PROJ_NR --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json)
             PROJ_ID=$(echo $PROJ_DATA | jq -r '.id')
             PROJ_TITLE=$(echo $PROJ_DATA | jq -r '.title')
             echo "Název: $PROJ_TITLE (ID: $PROJ_ID)"
@@ -55,7 +63,7 @@ jobs:
             FIELD_EDITED_ID=$(ensure_field "edited")
 
             # 2. Načtení položek projektu
-            items=$(gh project item-list $PROJ_NR --owner "$OWNER" --format json -q '.items[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
+            items=$(gh project item-list $PROJ_NR --owner "$OWNER" --owner-type "$OWNER_TYPE" --format json -q '.items[] | {id: .id, created: .content.createdAt, updated: .content.updatedAt}')
 
             # 3. Iterace přes položky a aktualizace dat
             echo "$items" | jq -c '.' | while read item; do
