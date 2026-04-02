@@ -17,11 +17,21 @@ jobs:
         run: |
           echo "Hledám všechny projekty pro $OWNER..."
 
-          # Detect owner type (org or user)
-          if gh api "orgs/$OWNER" >/dev/null 2>&1; then
+          # Detect owner type (org or user) using GraphQL queries for clarity
+          # Prefer explicit checks: if organization query returns a non-null
+          # result, treat as org; otherwise check for a user. If neither
+          # is accessible, fail early so we don't mis-classify an org as a user.
+          org_exists=$(gh api graphql -f query='query($owner:String!){organization(login:$owner){id}}' -f owner="$OWNER" --jq '.data.organization != null' 2>/dev/null || echo "false")
+          if [ "$org_exists" = "true" ]; then
             OWNER_TYPE=org
           else
-            OWNER_TYPE=user
+            user_exists=$(gh api graphql -f query='query($owner:String!){user(login:$owner){id}}' -f owner="$OWNER" --jq '.data.user != null' 2>/dev/null || echo "false")
+            if [ "$user_exists" = "true" ]; then
+              OWNER_TYPE=user
+            else
+              echo "Nelze ověřit vlastníka '$OWNER' (možná neexistuje nebo token nemá potřebná oprávnění)."
+              exit 1
+            fi
           fi
           echo "Owner type: $OWNER_TYPE"
 
@@ -69,7 +79,9 @@ jobs:
               fi
 
               cursor="$end_cursor"
-              [ -z "$cursor" ] && has_next="false"
+              if [ -z "$cursor" ]; then
+                has_next="false"
+              fi
             done
 
             echo "$result"
@@ -114,7 +126,9 @@ jobs:
               fi
 
               cursor="$end_cursor"
-              [ -z "$cursor" ] && has_next="false"
+              if [ -z "$cursor" ]; then
+                has_next="false"
+              fi
             done
 
             echo "$result"
