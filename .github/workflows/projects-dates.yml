@@ -13,8 +13,8 @@ jobs:
     steps:
       - name: Sync All Organization Projects
         env:
-          GH_TOKEN: ${{ secrets.***TOKEN_PROJECT*** }} # Token s přístupem k projektům
-          OWNER: "***OWNER***" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
+          GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }} # Token s přístupem k projektům
+          OWNER: "jankoweb-zzz-test" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
           FIELD_CREATED: "added"   # Název vašeho sloupce v projektu
           FIELD_UPDATED: "edited"  # Název vašeho sloupce v projektu
         run: |
