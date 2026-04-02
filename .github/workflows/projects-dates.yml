@@ -1,7 +1,10 @@
+# Variables marked as ***VARIABLE*** will be loaded into tables and will be editable
+
 name: Projects dates update (cron)
 on:
+  # pokud chces vypnout cron, zakomentuj cele schedule
   schedule:
-    - cron: '0 * * * *' # Každou hodinu
+    - cron: '0 * * * *' # Každou hodinu; cron má 5 polí: minuta, hodina, den, měsíc, den v týdnu. 0 * * * * znamená „v každou celou hodinu (minuta 0)“  
   workflow_dispatch:      # Pro ruční spuštění
 
 jobs:
@@ -10,35 +13,48 @@ jobs:
     steps:
       - name: Sync All Organization Projects
         env:
-          GH_TOKEN: ${{ secrets.TEST_PROJECT_TOKEN }}
-          OWNER: "jankoweb-test-org" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
+          GH_TOKEN: ${{ secrets.***TOKEN_PROJECT*** }} # Token s přístupem k projektům
+          OWNER: "***OWNER***" # <--- SEM NAPIŠTE JMÉNO ORG NEBO USERA
           FIELD_CREATED: "added"   # Název vašeho sloupce v projektu
           FIELD_UPDATED: "edited"  # Název vašeho sloupce v projektu
         run: |
           echo "Hledám všechny projekty pro $OWNER..."
 
-          # Detect owner type (org or user) using GraphQL queries for clarity
-          # Prefer explicit checks: if organization query returns a non-null
-          # result, treat as org; otherwise check for a user. If neither
-          # is accessible, fail early so we don't mis-classify an org as a user.
-          org_exists=$(gh api graphql -f query='query($owner:String!){organization(login:$owner){id}}' -f owner="$OWNER" --jq '.data.organization != null' 2>/dev/null || echo "false")
-          if [ "$org_exists" = "true" ]; then
+          # Detect owner type (org or user).
+          # Strategy:
+          # 1) Try public REST endpoint `orgs/$OWNER` (works for public orgs).
+          # 2) If REST didn't confirm, try GraphQL organization query.
+          # 3) If still not, try GraphQL user query.
+          # If none confirm, exit with a clear error (likely wrong name or token scopes).
+
+          if gh api "orgs/$OWNER" >/dev/null 2>&1; then
             OWNER_TYPE=org
+            echo "Owner detected via REST: org"
           else
-            user_exists=$(gh api graphql -f query='query($owner:String!){user(login:$owner){id}}' -f owner="$OWNER" --jq '.data.user != null' 2>/dev/null || echo "false")
-            if [ "$user_exists" = "true" ]; then
-              OWNER_TYPE=user
+            org_exists=$(gh api graphql -f query='query($owner:String!){organization(login:$owner){id}}' -f owner="$OWNER" --jq '.data.organization != null' 2>/dev/null || echo "false")
+            if [ "$org_exists" = "true" ]; then
+              OWNER_TYPE=org
+              echo "Owner detected via GraphQL: org"
             else
-              echo "Nelze ověřit vlastníka '$OWNER' (možná neexistuje nebo token nemá potřebná oprávnění)."
-              exit 1
+              user_exists=$(gh api graphql -f query='query($owner:String!){user(login:$owner){id}}' -f owner="$OWNER" --jq '.data.user != null' 2>/dev/null || echo "false")
+              if [ "$user_exists" = "true" ]; then
+                OWNER_TYPE=user
+                echo "Owner detected via GraphQL: user"
+              else
+                echo "Nelze ověřit vlastníka '$OWNER' (možná neexistuje nebo token nemá potřebná oprávnění)."
+                exit 1
+              fi
             fi
           fi
+
           echo "Owner type: $OWNER_TYPE"
 
+          # If we detected an org but REST org endpoint wasn't successful earlier,
+          # warn about potential token scope issues but continue — GraphQL calls
+          # may still work for projects depending on token scopes.
           if [ "$OWNER_TYPE" = "org" ] && ! gh api "orgs/$OWNER" >/dev/null 2>&1; then
-            echo "Token nemá přístup k organizaci '$OWNER'."
-            echo "Pro org projekty je potřeba minimálně scope: read:org"
-            exit 1
+            echo "Upozornění: REST kontrola organizace selhala. Token může postrádat přístup k organizaci '$OWNER'."
+            echo "Pro jistotu zajistěte, že token má alespoň scope: read:org"
           fi
 
           fetch_project_numbers() {
