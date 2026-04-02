@@ -3,8 +3,8 @@
 name: Projects dates update (cron)
 on:
   # pokud chces vypnout cron, zakomentuj cele schedule
-  schedule:
-    - cron: '0 * * * *' # Každou hodinu; cron má 5 polí: minuta, hodina, den, měsíc, den v týdnu. 0 * * * * znamená „v každou celou hodinu (minuta 0)“  
+  #schedule:
+  #  - cron: '0 * * * *' # Každou hodinu; cron má 5 polí: minuta, hodina, den, měsíc, den v týdnu. 0 * * * * znamená „v každou celou hodinu (minuta 0)“  
   workflow_dispatch:      # Pro ruční spuštění
 
 jobs:
